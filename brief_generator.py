@@ -64,12 +64,17 @@ def fetch_news(company_name):
 
 def fetch_linkedin_sdr_signals(company_name):
     """
-    Search LinkedIn via DuckDuckGo to surface real SDR/BDR team signals.
-    Runs three targeted searches:
-      1. LinkedIn profiles of current SDRs/BDRs at the company
-      2. LinkedIn profiles of Sales Development leaders
-      3. Open SDR/BDR job postings on LinkedIn
-    Returns a structured summary of what was found.
+    Search for real SDR/BDR team signals using five complementary queries.
+
+    Strategy:
+      1. Broad LinkedIn search (no /in restriction) — catches profiles, posts, company pages
+      2. Open-web search for SDR/BDR presence — Glassdoor, Crunchbase, The Org, news, etc.
+      3. Open-web leadership search — catches VPs/Directors/Managers of Sales Dev anywhere
+      4. Open-web hiring signals — job boards, LinkedIn Jobs, Lever, Greenhouse, Workday postings
+      5. Broad alternative title sweep — ADR, MDR, ISR, inside sales, outbound sales rep
+
+    Why no site:linkedin.com/in — DuckDuckGo barely indexes individual LinkedIn profile pages.
+    Broad site:linkedin.com and unrestricted searches surface far more real signal.
     """
     if not HAS_SEARCH:
         return ""
@@ -77,24 +82,44 @@ def fetch_linkedin_sdr_signals(company_name):
     findings = []
 
     queries = [
-        # Individual SDR/BDR profiles
+        # 1. Broad LinkedIn — profiles, company pages, posts, any linkedin.com page
         (
-            f'site:linkedin.com/in "{company_name}" '
-            f'"Sales Development Representative" OR "Business Development Representative" OR "SDR" OR "BDR"',
-            "SDR/BDR profiles"
+            f'site:linkedin.com "{company_name}" '
+            f'"Sales Development Representative" OR "Business Development Representative" '
+            f'OR "SDR" OR "BDR" OR "sales development" OR "business development representative"',
+            "LinkedIn — SDR/BDR presence (profiles, posts, company pages)"
         ),
-        # Sales Development leadership
+        # 2. Open web — SDR/BDR employees mentioned anywhere (Glassdoor, The Org, Crunchbase, news)
         (
-            f'site:linkedin.com/in "{company_name}" '
-            f'"Head of Sales Development" OR "VP of Sales Development" OR "Director of Sales Development" '
-            f'OR "Manager of Sales Development" OR "SDR Manager" OR "BDR Manager"',
-            "SDR/BDR leadership"
+            f'"{company_name}" '
+            f'"sales development representative" OR "business development representative" '
+            f'OR "SDR team" OR "BDR team" OR "SDR" OR "BDR" '
+            f'-site:linkedin.com',
+            "Open web — SDR/BDR team mentions (Glassdoor, The Org, news, etc.)"
         ),
-        # Open job postings for SDRs/BDRs
+        # 3. Open web — Sales Dev leadership (VP, Director, Head, Manager) — no site restriction
         (
-            f'site:linkedin.com/jobs "{company_name}" '
-            f'"Sales Development Representative" OR "Business Development Representative" OR "SDR" OR "BDR"',
-            "SDR/BDR job postings"
+            f'"{company_name}" '
+            f'"head of sales development" OR "VP of sales development" OR "VP sales development" '
+            f'OR "director of sales development" OR "SDR manager" OR "BDR manager" '
+            f'OR "manager of sales development" OR "sales development manager" '
+            f'OR "director of inside sales" OR "VP of inside sales"',
+            "Open web — Sales Development leadership signals"
+        ),
+        # 4. Hiring signals — LinkedIn Jobs + other job boards
+        (
+            f'"{company_name}" '
+            f'("sales development representative" OR "business development representative" OR "SDR" OR "BDR") '
+            f'(job OR jobs OR hiring OR "we are hiring" OR "now hiring" OR apply OR careers OR "job opening")',
+            "Hiring signals — SDR/BDR job postings (all job boards)"
+        ),
+        # 5. Alternative outbound rep titles — ADR, MDR, ISR, inside sales, outbound sales
+        (
+            f'"{company_name}" '
+            f'"account development representative" OR "ADR" OR "market development representative" '
+            f'OR "MDR" OR "inside sales representative" OR "outbound sales representative" '
+            f'OR "inside sales" OR "outbound sales rep" OR "pipeline development representative"',
+            "Alternative SDR title sweep — ADR, MDR, ISR, inside sales"
         ),
     ]
 
@@ -102,13 +127,15 @@ def fetch_linkedin_sdr_signals(company_name):
         try:
             results = []
             with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=8):
-                    title = r.get("title", "")
-                    snippet = r.get("body", "")[:180]
-                    url = r.get("href", "")
-                    results.append(f"  • {title} — {snippet}")
+                for r in ddgs.text(query, max_results=10):
+                    title   = r.get("title", "")
+                    snippet = r.get("body", "")[:200]
+                    url     = r.get("href", "")
+                    results.append(f"  • [{url}] {title} — {snippet}")
             if results:
-                findings.append(f"[{label} — {len(results)} result(s) found]\n" + "\n".join(results))
+                findings.append(
+                    f"[{label} — {len(results)} result(s) found]\n" + "\n".join(results)
+                )
             else:
                 findings.append(f"[{label} — 0 results found]")
         except Exception as e:
@@ -370,16 +397,20 @@ CONTEXT:
 {context}
 
 ---
-HOW TO INTERPRET LINKEDIN SDR/BDR SIGNALS:
-The LinkedIn data above was gathered by searching LinkedIn profiles and job postings via DuckDuckGo.
-Use it as your primary source of truth for SDR/BDR team size — it is more reliable than website copy.
+HOW TO INTERPRET THE SDR/BDR SIGNALS:
+Five searches were run — LinkedIn broad search, open-web mentions, leadership search, hiring signals,
+and alternative title sweep (ADR, MDR, ISR, inside sales). Use these as your primary source of truth
+for SDR/BDR team presence and size — they are more reliable than website copy.
 
-- Count how many distinct SDR/BDR profile results appear. Each result typically represents one real employee.
-  Use this to estimate team size: 1–3 results = very small team; 4–8 = small team; 9–20 = mid-size; 20+ = large team.
-- Job posting results indicate active hiring and growth intent — weight this positively.
-- Leadership results (Head/VP/Director/Manager of Sales Dev) confirm a structured outbound org — weight this strongly.
-- If LinkedIn searches returned 0 results for profiles AND 0 for job postings, treat SDR/BDR team presence as Unknown or Weak.
-- Do NOT let the website or news content override clear LinkedIn evidence of a large or small SDR team.
+Interpreting results:
+- Each distinct profile or person mention typically represents one real team member.
+  Estimate team size: 1–3 results = very small; 4–8 = small; 9–20 = mid-size; 20+ = large team.
+- Mentions on Glassdoor, The Org, Crunchbase, or news articles confirm the team is real and visible.
+- Any active job posting for an SDR/BDR/ADR/MDR role = strong growth signal, weight positively.
+- Leadership results (VP/Director/Head/Manager of Sales Dev) = structured outbound org, weight strongly.
+- Alternative titles (ADR, MDR, ISR, inside sales rep) count equally — they are the same role.
+- If ALL five searches returned 0 results, treat SDR/BDR presence as Unknown or Weak.
+- Do NOT let website copy override clear evidence from search results about team size or presence.
 
 ---
 Research this company and produce an ICP scorecard. Format it exactly like this:
@@ -398,10 +429,11 @@ Research this company and produce an ICP scorecard. Format it exactly like this:
 
 ### SDR / BDR Team Intelligence
 
-- **Estimated SDR/BDR headcount:** [Your best estimate based on LinkedIn profile results — e.g. "~12 profiles found" or "0 profiles found"]
-- **Leadership present:** [Yes / No / Unknown — name any SDR/BDR leaders found]
-- **Active hiring:** [Yes / No — based on job postings found]
-- **LinkedIn confidence:** [High / Medium / Low — based on how many results were returned]
+- **Estimated SDR/BDR headcount:** [Best estimate from all search results — e.g. "~15 reps found across LinkedIn + Glassdoor" or "No individual reps found"]
+- **Title variants found:** [List any non-standard titles surfaced — ADR, MDR, ISR, inside sales, etc.]
+- **Leadership present:** [Yes / No / Unknown — name specific leaders found and their titles]
+- **Active hiring:** [Yes / No — cite any specific job postings found]
+- **Signal confidence:** [High / Medium / Low — based on how many of the 5 searches returned results]
 
 ---
 
