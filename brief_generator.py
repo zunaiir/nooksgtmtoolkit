@@ -62,6 +62,61 @@ def fetch_news(company_name):
         return ""
 
 
+def fetch_linkedin_sdr_signals(company_name):
+    """
+    Search LinkedIn via DuckDuckGo to surface real SDR/BDR team signals.
+    Runs three targeted searches:
+      1. LinkedIn profiles of current SDRs/BDRs at the company
+      2. LinkedIn profiles of Sales Development leaders
+      3. Open SDR/BDR job postings on LinkedIn
+    Returns a structured summary of what was found.
+    """
+    if not HAS_SEARCH:
+        return ""
+
+    findings = []
+
+    queries = [
+        # Individual SDR/BDR profiles
+        (
+            f'site:linkedin.com/in "{company_name}" '
+            f'"Sales Development Representative" OR "Business Development Representative" OR "SDR" OR "BDR"',
+            "SDR/BDR profiles"
+        ),
+        # Sales Development leadership
+        (
+            f'site:linkedin.com/in "{company_name}" '
+            f'"Head of Sales Development" OR "VP of Sales Development" OR "Director of Sales Development" '
+            f'OR "Manager of Sales Development" OR "SDR Manager" OR "BDR Manager"',
+            "SDR/BDR leadership"
+        ),
+        # Open job postings for SDRs/BDRs
+        (
+            f'site:linkedin.com/jobs "{company_name}" '
+            f'"Sales Development Representative" OR "Business Development Representative" OR "SDR" OR "BDR"',
+            "SDR/BDR job postings"
+        ),
+    ]
+
+    for query, label in queries:
+        try:
+            results = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=8):
+                    title = r.get("title", "")
+                    snippet = r.get("body", "")[:180]
+                    url = r.get("href", "")
+                    results.append(f"  • {title} — {snippet}")
+            if results:
+                findings.append(f"[{label} — {len(results)} result(s) found]\n" + "\n".join(results))
+            else:
+                findings.append(f"[{label} — 0 results found]")
+        except Exception as e:
+            findings.append(f"[{label} — search failed: {e}]")
+
+    return "\n\n".join(findings) if findings else ""
+
+
 def generate_brief(company_name, website_url, contact_name, contact_title):
     """Call Claude to generate the pre-call research brief."""
     website_content = fetch_website(website_url)
@@ -277,14 +332,17 @@ Rules:
 
 def generate_icp_score(company_name, website_url):
     """Research a company and score it against Nooks' ICP (1-4)."""
-    website_content = fetch_website(website_url)
-    news_content    = fetch_news(company_name)
+    website_content   = fetch_website(website_url)
+    news_content      = fetch_news(company_name)
+    linkedin_signals  = fetch_linkedin_sdr_signals(company_name)
 
     context_parts = []
     if website_content:
-        context_parts.append(f"Website content:\n{website_content}")
+        context_parts.append(f"WEBSITE CONTENT:\n{website_content}")
     if news_content:
-        context_parts.append(f"Recent news:\n{news_content}")
+        context_parts.append(f"RECENT NEWS:\n{news_content}")
+    if linkedin_signals:
+        context_parts.append(f"LINKEDIN SDR/BDR SIGNALS (searched LinkedIn via DuckDuckGo):\n{linkedin_signals}")
     context = "\n\n".join(context_parts) if context_parts else "No additional context available."
 
     prompt = f"""You are a sales researcher helping Nooks' GTM team decide whether to pursue a prospect.
@@ -301,7 +359,7 @@ NOT a good fit:
 - Companies with no outbound motion (inbound-only or PLG-only)
 - Very early-stage startups with no dedicated SDR team yet
 - Companies without a phone-heavy sales motion (purely email or social)
-- Non-B2B companies (e2c, consumer, retail)
+- Non-B2B companies (B2C, consumer, retail)
 - Very small teams (fewer than 3 SDRs) with no growth plans
 
 ---
@@ -310,6 +368,18 @@ WEBSITE: {website_url or "Not provided"}
 ---
 CONTEXT:
 {context}
+
+---
+HOW TO INTERPRET LINKEDIN SDR/BDR SIGNALS:
+The LinkedIn data above was gathered by searching LinkedIn profiles and job postings via DuckDuckGo.
+Use it as your primary source of truth for SDR/BDR team size — it is more reliable than website copy.
+
+- Count how many distinct SDR/BDR profile results appear. Each result typically represents one real employee.
+  Use this to estimate team size: 1–3 results = very small team; 4–8 = small team; 9–20 = mid-size; 20+ = large team.
+- Job posting results indicate active hiring and growth intent — weight this positively.
+- Leadership results (Head/VP/Director/Manager of Sales Dev) confirm a structured outbound org — weight this strongly.
+- If LinkedIn searches returned 0 results for profiles AND 0 for job postings, treat SDR/BDR team presence as Unknown or Weak.
+- Do NOT let the website or news content override clear LinkedIn evidence of a large or small SDR team.
 
 ---
 Research this company and produce an ICP scorecard. Format it exactly like this:
@@ -322,14 +392,23 @@ Research this company and produce an ICP scorecard. Format it exactly like this:
 
 ### Why This Score
 
-[2–3 sentences explaining the reasoning. Be specific about what signals you found or didn't find.]
+[2–3 sentences explaining the reasoning. Be specific about signals found — especially what the LinkedIn data showed about their SDR/BDR team.]
+
+---
+
+### SDR / BDR Team Intelligence
+
+- **Estimated SDR/BDR headcount:** [Your best estimate based on LinkedIn profile results — e.g. "~12 profiles found" or "0 profiles found"]
+- **Leadership present:** [Yes / No / Unknown — name any SDR/BDR leaders found]
+- **Active hiring:** [Yes / No — based on job postings found]
+- **LinkedIn confidence:** [High / Medium / Low — based on how many results were returned]
 
 ---
 
 ### ICP Signal Breakdown
 
 - **Outbound Sales Motion:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
-- **SDR / BDR Team Size:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
+- **SDR / BDR Team Size:** [Strong / Moderate / Weak / Unknown] — [one line with the actual LinkedIn-derived estimate]
 - **Industry Fit:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
 - **Company Stage & Growth:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
 - **Pain Signal Presence:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
@@ -352,7 +431,8 @@ Scoring guide:
 - 2 = 1–2 strong signals or mixed signals — possible fit, needs qualification
 - 1 = Few or no ICP signals — poor fit, not worth time right now
 
-Be honest. If a company doesn't fit, say so clearly. A bad lead wastes more time than no lead.
+Be honest and precise. The LinkedIn data is ground truth for SDR team size — use it.
+A bad lead wastes more time than no lead.
 """
 
     client = anthropic.Anthropic()
