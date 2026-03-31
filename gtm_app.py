@@ -429,7 +429,7 @@ elif "ICP" in tool:
                 st.error(f"Import error: {ie}")
                 st.stop()
 
-            with st.spinner(f"Researching {company_name}..."):
+            with st.spinner(f"Searching LinkedIn + web for {company_name} SDR/BDR signals..."):
                 try:
                     result = generate_icp_score(company_name, website_url)
                 except Exception as e:
