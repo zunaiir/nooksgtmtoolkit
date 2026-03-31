@@ -62,86 +62,126 @@ def fetch_news(company_name):
         return ""
 
 
+def _ddg_search(query, label, max_results=10):
+    """Run a single DuckDuckGo text search and return a formatted findings string."""
+    try:
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=max_results):
+                title   = r.get("title", "")
+                snippet = r.get("body", "")[:220]
+                url     = r.get("href", "")
+                results.append(f"  • [{url}]\n    {title}\n    {snippet}")
+        if results:
+            return f"[{label} — {len(results)} result(s)]\n" + "\n".join(results)
+        return f"[{label} — 0 results]"
+    except Exception as e:
+        return f"[{label} — failed: {e}]"
+
+
+def _fetch_page_text(url, label, char_limit=3000):
+    """Directly fetch a page and return its visible text (best-effort)."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return f"[{label} — HTTP {r.status_code}]"
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)[:char_limit]
+        return f"[{label} — fetched successfully]\n{text}" if text else f"[{label} — empty page]"
+    except Exception as e:
+        return f"[{label} — fetch failed: {e}]"
+
+
 def fetch_linkedin_sdr_signals(company_name):
     """
-    Search for real SDR/BDR team signals using five complementary queries.
+    Surface real SDR/BDR team signals using simple targeted searches + direct page fetches.
 
-    Strategy:
-      1. Broad LinkedIn search (no /in restriction) — catches profiles, posts, company pages
-      2. Open-web search for SDR/BDR presence — Glassdoor, Crunchbase, The Org, news, etc.
-      3. Open-web leadership search — catches VPs/Directors/Managers of Sales Dev anywhere
-      4. Open-web hiring signals — job boards, LinkedIn Jobs, Lever, Greenhouse, Workday postings
-      5. Broad alternative title sweep — ADR, MDR, ISR, inside sales, outbound sales rep
+    Problem with previous approach: long OR-chains and site: restrictions cause DuckDuckGo
+    to silently drop queries or return zero results. Fix: one concept per query, short and direct.
 
-    Why no site:linkedin.com/in — DuckDuckGo barely indexes individual LinkedIn profile pages.
-    Broad site:linkedin.com and unrestricted searches surface far more real signal.
+    Eight signal sources:
+      1–2. Simple SDR/BDR title searches (no boolean complexity)
+      3.   SDR leadership titles search
+      4.   Hiring signals search
+      5.   Alternative title search (ADR, MDR, ISR, inside sales)
+      6.   Direct fetch of The Org page (real org chart data)
+      7.   Direct fetch of Glassdoor people/reviews page
+      8.   LinkedIn company people page (best-effort — often partial)
     """
     if not HAS_SEARCH:
         return ""
 
+    slug = company_name.lower().replace(" ", "-").replace(".", "").replace(",", "")
     findings = []
 
-    queries = [
-        # 1. Broad LinkedIn — profiles, company pages, posts, any linkedin.com page
-        (
-            f'site:linkedin.com "{company_name}" '
-            f'"Sales Development Representative" OR "Business Development Representative" '
-            f'OR "SDR" OR "BDR" OR "sales development" OR "business development representative"',
-            "LinkedIn — SDR/BDR presence (profiles, posts, company pages)"
-        ),
-        # 2. Open web — SDR/BDR employees mentioned anywhere (Glassdoor, The Org, Crunchbase, news)
-        (
-            f'"{company_name}" '
-            f'"sales development representative" OR "business development representative" '
-            f'OR "SDR team" OR "BDR team" OR "SDR" OR "BDR" '
-            f'-site:linkedin.com',
-            "Open web — SDR/BDR team mentions (Glassdoor, The Org, news, etc.)"
-        ),
-        # 3. Open web — Sales Dev leadership (VP, Director, Head, Manager) — no site restriction
-        (
-            f'"{company_name}" '
-            f'"head of sales development" OR "VP of sales development" OR "VP sales development" '
-            f'OR "director of sales development" OR "SDR manager" OR "BDR manager" '
-            f'OR "manager of sales development" OR "sales development manager" '
-            f'OR "director of inside sales" OR "VP of inside sales"',
-            "Open web — Sales Development leadership signals"
-        ),
-        # 4. Hiring signals — LinkedIn Jobs + other job boards
-        (
-            f'"{company_name}" '
-            f'("sales development representative" OR "business development representative" OR "SDR" OR "BDR") '
-            f'(job OR jobs OR hiring OR "we are hiring" OR "now hiring" OR apply OR careers OR "job opening")',
-            "Hiring signals — SDR/BDR job postings (all job boards)"
-        ),
-        # 5. Alternative outbound rep titles — ADR, MDR, ISR, inside sales, outbound sales
-        (
-            f'"{company_name}" '
-            f'"account development representative" OR "ADR" OR "market development representative" '
-            f'OR "MDR" OR "inside sales representative" OR "outbound sales representative" '
-            f'OR "inside sales" OR "outbound sales rep" OR "pipeline development representative"',
-            "Alternative SDR title sweep — ADR, MDR, ISR, inside sales"
-        ),
-    ]
+    # ── Simple DuckDuckGo searches — one concept each ────────────────────────
 
-    for query, label in queries:
-        try:
-            results = []
-            with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=10):
-                    title   = r.get("title", "")
-                    snippet = r.get("body", "")[:200]
-                    url     = r.get("href", "")
-                    results.append(f"  • [{url}] {title} — {snippet}")
-            if results:
-                findings.append(
-                    f"[{label} — {len(results)} result(s) found]\n" + "\n".join(results)
-                )
-            else:
-                findings.append(f"[{label} — 0 results found]")
-        except Exception as e:
-            findings.append(f"[{label} — search failed: {e}]")
+    # 1. SDR title — bare and direct
+    findings.append(_ddg_search(
+        f'{company_name} "sales development representative"',
+        "Search 1: SDR title"
+    ))
 
-    return "\n\n".join(findings) if findings else ""
+    # 2. BDR title — separate query, not an OR chain
+    findings.append(_ddg_search(
+        f'{company_name} "business development representative"',
+        "Search 2: BDR title"
+    ))
+
+    # 3. SDR/BDR leadership — short, one phrase at a time
+    findings.append(_ddg_search(
+        f'{company_name} "head of sales development" OR "VP of sales development" OR "director of sales development"',
+        "Search 3: SDR leadership (Head / VP / Director)"
+    ))
+    findings.append(_ddg_search(
+        f'{company_name} "SDR manager" OR "BDR manager" OR "sales development manager"',
+        "Search 4: SDR manager titles"
+    ))
+
+    # 4. Hiring signals — simple job-board search
+    findings.append(_ddg_search(
+        f'{company_name} "sales development representative" jobs hiring',
+        "Search 5: SDR hiring signals"
+    ))
+
+    # 5. Alternative outbound rep titles — one query per title family
+    findings.append(_ddg_search(
+        f'{company_name} "inside sales representative" OR "inside sales" OR "outbound sales representative"',
+        "Search 6: Inside sales / outbound rep titles"
+    ))
+    findings.append(_ddg_search(
+        f'{company_name} "account development representative" OR "market development representative"',
+        "Search 7: ADR / MDR titles"
+    ))
+
+    # ── Direct page fetches — richer structured data ─────────────────────────
+
+    # 6. The Org — has real org charts with headcounts and team breakdowns
+    findings.append(_fetch_page_text(
+        f"https://theorg.com/org/{slug}/teams/sales-development",
+        "The Org — Sales Development team page"
+    ))
+    findings.append(_fetch_page_text(
+        f"https://theorg.com/org/{slug}",
+        "The Org — company overview page"
+    ))
+
+    # 7. Glassdoor jobs page for SDR roles at this company
+    findings.append(_fetch_page_text(
+        f"https://www.glassdoor.com/Jobs/{company_name.replace(' ', '-')}-Sales-Development-Representative-Jobs-E0.htm",
+        "Glassdoor — SDR job listings"
+    ))
+
+    # 8. LinkedIn company people page (often partial but sometimes surfaces role data)
+    findings.append(_fetch_page_text(
+        f"https://www.linkedin.com/company/{slug}/people/",
+        "LinkedIn — company people page (best-effort)"
+    ))
+
+    return "\n\n".join(f for f in findings if f) or "No SDR/BDR signals found."
 
 
 def generate_brief(company_name, website_url, contact_name, contact_title):
@@ -595,6 +635,10 @@ def main():
 
     print(f"\n✅ Saved to Desktop → {safe_name} → brief.docx")
     print("   Open it in Word or drag it into Google Docs.\n")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
