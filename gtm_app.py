@@ -188,7 +188,7 @@ if logo_file:
     with open(logo_file, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
     st.sidebar.markdown(
-        f'<img src="data:{mime};base64,{encoded}" width="130" style="margin-bottom:10px;">',
+        f'<img src="data:{mime};base64,{encoded}" width="130" style="margin-bottom:30px;">',
         unsafe_allow_html=True
     )
 else:
