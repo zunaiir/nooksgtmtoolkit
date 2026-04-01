@@ -170,45 +170,6 @@ def _fetch_page(url, label, char_limit=3000):
         return f"[{label} — fetch error: {e}]"
 
 
-def fetch_job_board_signals(company_name, website_url=""):
-    """
-    Fetch publicly accessible job board pages that don't require login.
-    These are the only reliable automated sources for SDR/BDR hiring signals.
-
-    Sources tried:
-      - Company's own /careers and /jobs pages
-      - Greenhouse public board  (boards.greenhouse.io/{slug})
-      - Lever public board       (jobs.lever.co/{slug})
-      - Ashby public board       (jobs.ashbyhq.com/{slug})
-      - Workable public board    (apply.workable.com/{slug})
-
-    Google, LinkedIn, Glassdoor, and DuckDuckGo are NOT used here —
-    Google returns CAPTCHAs to automated requests, LinkedIn and Glassdoor
-    require login. Job boards are the only login-free, scrapeable sources.
-    """
-    slug = company_name.lower().replace(" ", "-").replace(".", "").replace(",", "").replace("'", "")
-    findings = []
-
-    # Company's own careers/jobs page
-    if website_url:
-        domain = website_url.replace("https://", "").replace("http://", "").rstrip("/").split("/")[0]
-        for path in ["/careers", "/jobs", "/about/careers", "/careers/open-roles"]:
-            result = _fetch_page(f"https://{domain}{path}", f"Company careers page ({path})")
-            if "fetched OK" in result:
-                findings.append(result)
-                break  # Stop at the first one that loads successfully
-
-    # Public ATS job boards — no login required on any of these
-    for board_url, board_name in [
-        (f"https://boards.greenhouse.io/{slug}",  "Greenhouse board"),
-        (f"https://jobs.lever.co/{slug}",          "Lever board"),
-        (f"https://jobs.ashbyhq.com/{slug}",       "Ashby board"),
-        (f"https://apply.workable.com/{slug}",     "Workable board"),
-    ]:
-        findings.append(_fetch_page(board_url, board_name))
-
-    return "\n\n".join(f for f in findings if f) or "No job board pages could be fetched."
-
 
 def generate_brief(company_name, website_url, contact_name, contact_title):
     """Call Claude to generate the pre-call research brief."""
@@ -427,24 +388,18 @@ def generate_icp_score(company_name, website_url):
     """Research a company and score it against Nooks' ICP (1-4)."""
     website_content = fetch_website(website_url)
     news_content    = fetch_news(company_name)
-    job_board_data  = fetch_job_board_signals(company_name, website_url)
 
     context_parts = []
     if website_content:
         context_parts.append(f"COMPANY WEBSITE CONTENT:\n{website_content}")
     if news_content:
         context_parts.append(f"RECENT NEWS:\n{news_content}")
-    if job_board_data:
-        context_parts.append(f"JOB BOARD DATA (careers page + Greenhouse/Lever/Ashby/Workable):\n{job_board_data}")
     context = "\n\n".join(context_parts) if context_parts else "No additional context available."
 
     prompt = f"""You are a sales researcher helping Nooks' GTM team decide whether to pursue a prospect.
-You have the company's website content, recent news, and any open job postings found on their careers
-page or public ATS boards (Greenhouse, Lever, Ashby, Workable).
-
-Your job is to reason like an experienced sales researcher — not just count web signals.
-Most companies do NOT have their SDR team size publicly indexed anywhere. You must infer
-the likelihood of an SDR team from the company's business model, GTM motion, and industry.
+You have the company's website content and recent news. Use these plus your own knowledge of the
+company to reason about their sales motion. Think like an experienced SDR leader reading their site
+for the first time — not like a system counting keywords.
 
 ---
 COMPANY: {company_name}
@@ -456,28 +411,27 @@ CONTEXT:
 ---
 HOW TO ASSESS WHETHER THIS COMPANY HAS AN SDR TEAM:
 
-Look at the website content and reason through these questions:
+Read the website content carefully and reason through these signals:
 
 1. WHAT DO THEY SELL AND TO WHOM?
-   - Selling complex software to mid-market or enterprise buyers → almost always has SDRs
-   - Self-serve / freemium / PLG with no "talk to sales" CTA → unlikely to have SDRs
-   - CTAs like "Book a demo", "Talk to an expert", "Request a quote" → strong SDR signal
-   - Pricing page with "Contact us" for higher tiers → SDR team likely
+   - Complex B2B software sold to mid-market or enterprise buyers → almost always has SDRs
+   - CTAs like "Book a Demo", "Talk to Sales", "Request a Quote", "Contact Us" → sales-led, SDRs very likely
+   - Pricing page with a "Contact us" tier → SDR team feeds those conversations
+   - Self-serve signup, free trial with no sales CTA, PLG → SDRs less likely
 
-2. WHAT INDUSTRY AND STAGE?
-   - B2B SaaS, fintech, cybersecurity, HR tech, sales tech, cloud infrastructure → SDR-heavy
-   - Series B or later, or established company with a sales team → SDR team very likely
-   - Seed / very early stage with no sales team yet → SDR team unlikely
-   - Consumer, B2C, retail, marketplace → SDRs unlikely
+2. WHAT IS THEIR INDUSTRY AND STAGE?
+   - B2B SaaS, fintech, cybersecurity, HR tech, sales tech, cloud/infra, RevOps → SDR-heavy sectors
+   - Funded (Series A+), 50+ employees, selling to companies not consumers → SDR team very likely
+   - Consumer product, marketplace, B2C → SDRs unlikely
 
-3. WHAT DOES THE JOB BOARD DATA SHOW?
-   - Any SDR/BDR/ADR/MDR/ISR postings found → confirmed SDR function, weight heavily
-   - Other sales roles posted (AE, Sales Manager, RevOps) → implies an SDR layer feeds them
-   - No job board data found → neutral signal only, do NOT treat as evidence of no SDRs
+3. WHAT DO YOU ALREADY KNOW ABOUT THIS COMPANY?
+   Use your own training knowledge. If you know they have a sales team or SDRs, use that.
+   The website content may be thin — your prior knowledge fills the gap.
 
-4. WHAT DO YOU ALREADY KNOW ABOUT THIS COMPANY?
-   Use your training knowledge. If you know this company has a sales team, use that.
-   Do not ignore what you know just because the website content is thin.
+4. WHAT DOES THE REST OF THE SITE SIGNAL?
+   - Mentions of "enterprise", "custom pricing", "dedicated support", "onboarding" → sales team present
+   - Case studies with named customers and quoted ROI → account executives and SDRs likely sourced them
+   - A "customers" or "about" page showing logos of recognizable B2B companies → outbound sales motion
 
 ---
 Nooks' Ideal Customer Profile:
@@ -511,9 +465,9 @@ conclusion about their SDR team likelihood and overall Nooks fit. Be direct and 
 
 ### SDR / BDR Team Assessment
 
-- **SDR team likelihood:** [High / Medium / Low] — [one sentence explaining the reasoning from their business model, not from web searches]
-- **Evidence from job boards:** [List any SDR/BDR/sales roles found in job board data, or "No open roles found — neutral signal"]
-- **Sales motion:** [Sales-led / PLG / Hybrid / Unknown] — [one line based on website CTAs and pricing model]
+- **SDR team likelihood:** [High / Medium / Low] — [one sentence reasoning from their business model and website signals]
+- **Sales motion:** [Sales-led / PLG / Hybrid / Unknown] — [one line — what do the CTAs and pricing page tell you?]
+- **Key website signals:** [Bullet the 2–3 specific things on their site that drove your conclusion — e.g. "Book a Demo CTA", "Enterprise pricing tier", "Named customer case studies"]
 - **Decision maker likely present:** [Yes / No / Unknown] — [VP Sales, CRO, Head of SDR, or similar]
 
 ---
