@@ -435,47 +435,64 @@ Read the website content carefully and reason through these signals:
 
 ---
 Nooks' Ideal Customer Profile:
-- B2B companies with a dedicated SDR or BDR team running outbound
-- Industries: B2B SaaS, fintech, cybersecurity, HR tech, MarTech, sales tech, healthcare tech, logistics tech
-- Stage: Series B+, or established companies scaling outbound
-- Buying signals: VP of Sales, Head of Sales Dev, CRO, RevOps as decision makers
-- Pain signals: low connect rates, long ramp times, inconsistent coaching, tool sprawl
 
-NOT a fit:
-- PLG / self-serve / inbound-only companies
-- Very early-stage startups with no sales team yet
-- B2C, consumer, retail
-- Pure product-led with no "talk to sales" motion
+Nooks sells across THREE tiers — score accordingly, don't penalise a company for being small.
+
+TIER 1 — Enterprise / Mid-Market (best ACV, longest sales cycle):
+- 20+ SDRs/BDRs, dedicated Sales Dev leadership, complex outbound stack
+- Series C+, 500+ employees, selling to enterprise
+
+TIER 2 — Mid-Market / Growth (core sweet spot):
+- 5–20 SDRs/BDRs, VP or Head of Sales Dev present
+- Series B–C, 100–500 employees, sales-led B2B SaaS
+
+TIER 3 — SMB (high volume, fast close, growing segment for Nooks):
+- 2–10 SDRs/BDRs, often founder-led or VP of Sales doubling as SDR manager
+- Seed–Series B, 10–100 employees, B2B with outbound motion
+- Even 1–3 SDRs trying to scale = a real Nooks opportunity
+- DO NOT score SMB companies as poor fit just because the team is small
+
+NOT a fit (score 1):
+- PLG / self-serve / inbound-only with zero sales CTA
+- Pure B2C, consumer, retail
+- Pre-revenue or no commercial sales motion whatsoever
+
+Industries that are almost always a fit regardless of size:
+- B2B SaaS, fintech, cybersecurity, HR tech, sales tech, RevOps, cloud/infra, MarTech, healthcare tech
+
+Buying signals: VP of Sales, Head of Sales Dev, CRO, RevOps, or founder running sales
+Pain signals: low connect rates, long ramp times, inconsistent coaching, tool sprawl
 
 ---
 Produce an ICP scorecard in this exact format:
 
 ### ICP Score: [1, 2, 3, or 4] / 4
 
-**[One-line verdict — e.g. "Strong fit — pursue now" or "Poor fit — deprioritize"]**
+**[One-line verdict — e.g. "Strong fit — pursue now" or "SMB opportunity — fast close potential"]**
 
 ---
 
 ### Why This Score
 
-[2–3 sentences. Lead with what the company does and who they sell to, then explain your
-conclusion about their SDR team likelihood and overall Nooks fit. Be direct and specific.]
+[2–3 sentences. Lead with what the company does and who they sell to, then state which Nooks
+tier they fall into (Enterprise, Mid-Market, or SMB) and why. Be direct and specific.]
 
 ---
 
 ### SDR / BDR Team Assessment
 
-- **SDR team likelihood:** [High / Medium / Low] — [one sentence reasoning from their business model and website signals]
-- **Sales motion:** [Sales-led / PLG / Hybrid / Unknown] — [one line — what do the CTAs and pricing page tell you?]
-- **Key website signals:** [Bullet the 2–3 specific things on their site that drove your conclusion — e.g. "Book a Demo CTA", "Enterprise pricing tier", "Named customer case studies"]
-- **Decision maker likely present:** [Yes / No / Unknown] — [VP Sales, CRO, Head of SDR, or similar]
+- **Account tier:** [Enterprise / Mid-Market / SMB] — [estimated team size and reasoning]
+- **SDR team likelihood:** [High / Medium / Low] — [one sentence from business model and website signals]
+- **Sales motion:** [Sales-led / PLG / Hybrid / Unknown] — [what do the CTAs and pricing tell you?]
+- **Key website signals:** [2–3 specific things that drove your conclusion — e.g. "Book a Demo CTA", "Contact us for pricing", "Named enterprise customer logos"]
+- **Decision maker likely present:** [Yes / No / Unknown] — [VP Sales, CRO, founder, Head of SDR]
 
 ---
 
 ### ICP Signal Breakdown
 
 - **Outbound Sales Motion:** [Strong / Moderate / Weak / Unknown] — [one line]
-- **SDR / BDR Team Likelihood:** [Strong / Moderate / Weak / Unknown] — [one line based on business model reasoning]
+- **SDR / BDR Team Likelihood:** [Strong / Moderate / Weak / Unknown] — [one line]
 - **Industry Fit:** [Strong / Moderate / Weak / Unknown] — [one line]
 - **Company Stage & Growth:** [Strong / Moderate / Weak / Unknown] — [one line]
 - **Pain Signal Presence:** [Strong / Moderate / Weak / Unknown] — [one line]
@@ -486,18 +503,18 @@ conclusion about their SDR team likelihood and overall Nooks fit. Be direct and 
 
 - **Score 4:** Prioritize immediately. Add to active pipeline and reach out this week.
 - **Score 3:** Worth pursuing. Research further and add to outbound sequence.
-- **Score 2:** Possible fit. Monitor and revisit when you have more information.
-- **Score 1:** Deprioritize. Move on — better opportunities exist.
+- **Score 2:** Possible fit — likely SMB. Fast qualification call to confirm team size.
+- **Score 1:** Deprioritize. PLG, B2C, or no sales motion — move on.
 
 ---
 
 Scoring guide:
-- 4 = Clear B2B sales-led company, strong industry fit, very likely has SDRs
-- 3 = Good fit indicators, probable SDR team, worth pursuing
-- 2 = Mixed signals — could go either way, needs qualification
-- 1 = PLG/inbound-only, B2C, or too early-stage to have SDRs
+- 4 = Clear sales-led B2B company, strong industry fit, SDR team very likely (any tier)
+- 3 = Good fit indicators, outbound motion probable — Enterprise, Mid-Market, or SMB
+- 2 = Small team or mixed signals but outbound motion possible — worth a quick call
+- 1 = No sales motion, PLG-only, or B2C — not a Nooks customer
 
-A bad lead wastes more time than no lead. Be honest.
+A small SDR team is NOT a reason to score low. SMB is a growth segment for Nooks.
 """
 
     client = anthropic.Anthropic()
@@ -632,4 +649,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
