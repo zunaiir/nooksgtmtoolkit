@@ -170,110 +170,44 @@ def _fetch_page(url, label, char_limit=3000):
         return f"[{label} — fetch error: {e}]"
 
 
-def fetch_sdr_signals(company_name, website_url=""):
+def fetch_job_board_signals(company_name, website_url=""):
     """
-    Surface SDR/BDR team signals via Google search + direct job-board page fetches.
+    Fetch publicly accessible job board pages that don't require login.
+    These are the only reliable automated sources for SDR/BDR hiring signals.
 
-    Layer 1 — Google searches (requests + BeautifulSoup, no extra library):
-      Each query targets one concept. Google surfaces LinkedIn profiles, Glassdoor
-      reviews, job postings, and news articles that DuckDuckGo misses.
+    Sources tried:
+      - Company's own /careers and /jobs pages
+      - Greenhouse public board  (boards.greenhouse.io/{slug})
+      - Lever public board       (jobs.lever.co/{slug})
+      - Ashby public board       (jobs.ashbyhq.com/{slug})
+      - Workable public board    (apply.workable.com/{slug})
 
-    Layer 2 — Direct page fetches of public, login-free sources:
-      Company careers page, Greenhouse board, Lever board.
-      (The Org excluded — data can be outdated.)
+    Google, LinkedIn, Glassdoor, and DuckDuckGo are NOT used here —
+    Google returns CAPTCHAs to automated requests, LinkedIn and Glassdoor
+    require login. Job boards are the only login-free, scrapeable sources.
     """
     slug = company_name.lower().replace(" ", "-").replace(".", "").replace(",", "").replace("'", "")
     findings = []
 
-    # ── Layer 1: Google searches ──────────────────────────────────────────────
-
-    # Core SDR/BDR title searches — catch LinkedIn profiles, Glassdoor, news
-    findings.append(_google_search(
-        f'{company_name} "sales development representative"',
-        "Google 1 — SDR title"
-    ))
-    findings.append(_google_search(
-        f'{company_name} "business development representative"',
-        "Google 2 — BDR title"
-    ))
-
-    # LinkedIn specifically — Google indexes LinkedIn profile snippets even when DDG doesn't
-    findings.append(_google_search(
-        f'{company_name} "sales development representative" site:linkedin.com',
-        "Google 3 — LinkedIn SDR profiles"
-    ))
-    findings.append(_google_search(
-        f'{company_name} "sales development" site:linkedin.com',
-        "Google 4 — LinkedIn sales development (broad)"
-    ))
-
-    # Glassdoor — employee reviews often mention SDR teams and headcounts
-    findings.append(_google_search(
-        f'{company_name} "sales development" site:glassdoor.com',
-        "Google 5 — Glassdoor SDR mentions"
-    ))
-
-    # Job boards — Greenhouse and Lever indexed by Google
-    findings.append(_google_search(
-        f'{company_name} "sales development representative" site:boards.greenhouse.io',
-        "Google 6 — Greenhouse SDR postings"
-    ))
-    findings.append(_google_search(
-        f'{company_name} "sales development representative" site:jobs.lever.co',
-        "Google 7 — Lever SDR postings"
-    ))
-    findings.append(_google_search(
-        f'{company_name} "sales development representative" site:wellfound.com',
-        "Google 8 — Wellfound SDR postings"
-    ))
-
-    # SDR leadership titles
-    findings.append(_google_search(
-        f'{company_name} "head of sales development" OR "VP of sales development" OR "director of sales development"',
-        "Google 9 — SDR leadership (Head/VP/Director)"
-    ))
-    findings.append(_google_search(
-        f'{company_name} "SDR manager" OR "BDR manager" OR "sales development manager"',
-        "Google 10 — SDR manager titles"
-    ))
-
-    # Alternative outbound rep titles
-    findings.append(_google_search(
-        f'{company_name} "inside sales representative" OR "account development representative"',
-        "Google 11 — ISR / ADR titles"
-    ))
-
-    # General hiring signal — catches any mention of SDR hiring on the open web
-    findings.append(_google_search(
-        f'{company_name} SDR hiring',
-        "Google 12 — SDR hiring signal"
-    ))
-    findings.append(_google_search(
-        f'{company_name} BDR hiring',
-        "Google 13 — BDR hiring signal"
-    ))
-
-    # ── Layer 2: Direct page fetches (public, no login required) ─────────────
-
-    # Company's own careers/jobs page — most authoritative for open SDR roles
+    # Company's own careers/jobs page
     if website_url:
         domain = website_url.replace("https://", "").replace("http://", "").rstrip("/").split("/")[0]
         for path in ["/careers", "/jobs", "/about/careers", "/careers/open-roles"]:
-            findings.append(_fetch_page(f"https://{domain}{path}", f"Careers page ({path})"))
+            result = _fetch_page(f"https://{domain}{path}", f"Company careers page ({path})")
+            if "fetched OK" in result:
+                findings.append(result)
+                break  # Stop at the first one that loads successfully
 
-    # Public Greenhouse job board — no login required
-    findings.append(_fetch_page(
-        f"https://boards.greenhouse.io/{slug}",
-        "Greenhouse board (direct fetch)"
-    ))
+    # Public ATS job boards — no login required on any of these
+    for board_url, board_name in [
+        (f"https://boards.greenhouse.io/{slug}",  "Greenhouse board"),
+        (f"https://jobs.lever.co/{slug}",          "Lever board"),
+        (f"https://jobs.ashbyhq.com/{slug}",       "Ashby board"),
+        (f"https://apply.workable.com/{slug}",     "Workable board"),
+    ]:
+        findings.append(_fetch_page(board_url, board_name))
 
-    # Public Lever job board — no login required
-    findings.append(_fetch_page(
-        f"https://jobs.lever.co/{slug}",
-        "Lever board (direct fetch)"
-    ))
-
-    return "\n\n".join(f for f in findings if f) or "No SDR/BDR signals found across all sources."
+    return "\n\n".join(f for f in findings if f) or "No job board pages could be fetched."
 
 
 def generate_brief(company_name, website_url, contact_name, contact_title):
@@ -491,35 +425,26 @@ Rules:
 
 def generate_icp_score(company_name, website_url):
     """Research a company and score it against Nooks' ICP (1-4)."""
-    website_content   = fetch_website(website_url)
-    news_content      = fetch_news(company_name)
-    linkedin_signals  = fetch_sdr_signals(company_name, website_url)
+    website_content = fetch_website(website_url)
+    news_content    = fetch_news(company_name)
+    job_board_data  = fetch_job_board_signals(company_name, website_url)
 
     context_parts = []
     if website_content:
-        context_parts.append(f"WEBSITE CONTENT:\n{website_content}")
+        context_parts.append(f"COMPANY WEBSITE CONTENT:\n{website_content}")
     if news_content:
         context_parts.append(f"RECENT NEWS:\n{news_content}")
-    if linkedin_signals:
-        context_parts.append(f"LINKEDIN SDR/BDR SIGNALS (searched LinkedIn via DuckDuckGo):\n{linkedin_signals}")
+    if job_board_data:
+        context_parts.append(f"JOB BOARD DATA (careers page + Greenhouse/Lever/Ashby/Workable):\n{job_board_data}")
     context = "\n\n".join(context_parts) if context_parts else "No additional context available."
 
     prompt = f"""You are a sales researcher helping Nooks' GTM team decide whether to pursue a prospect.
+You have the company's website content, recent news, and any open job postings found on their careers
+page or public ATS boards (Greenhouse, Lever, Ashby, Workable).
 
-Nooks' Ideal Customer Profile (ICP):
-- B2B companies with a dedicated SDR or BDR team running high-volume outbound
-- Industries: B2B SaaS, fintech, cybersecurity, HR tech, MarTech, sales tech, healthcare tech, logistics tech
-- Company stage: Series B and beyond, or established companies scaling their outbound sales motion
-- Team signals: 5+ SDRs/BDRs, active hiring for SDR/BDR roles, SDR leader (Head of Sales Dev / VP Sales Dev) present
-- Pain signals: low connect rates on outbound calls, long rep ramp times (90+ days), inconsistent coaching, relying on manual research, scattered tool stack (separate dialer + sequencer + coaching tool)
-- Decision makers: VP of Sales, Head of Sales Development, CRO, Revenue Operations
-
-NOT a good fit:
-- Companies with no outbound motion (inbound-only or PLG-only)
-- Very early-stage startups with no dedicated SDR team yet
-- Companies without a phone-heavy sales motion (purely email or social)
-- Non-B2B companies (B2C, consumer, retail)
-- Very small teams (fewer than 3 SDRs) with no growth plans
+Your job is to reason like an experienced sales researcher — not just count web signals.
+Most companies do NOT have their SDR team size publicly indexed anywhere. You must infer
+the likelihood of an SDR team from the company's business model, GTM motion, and industry.
 
 ---
 COMPANY: {company_name}
@@ -529,34 +454,47 @@ CONTEXT:
 {context}
 
 ---
-HOW TO INTERPRET THE SDR/BDR SIGNALS:
-Up to 13 searches and 4 direct page fetches were run across job boards (Greenhouse, Lever, Wellfound),
-Glassdoor, The Org, and the company's own careers page. Use all results together.
+HOW TO ASSESS WHETHER THIS COMPANY HAS AN SDR TEAM:
 
-CRITICAL RULES — read carefully before scoring:
+Look at the website content and reason through these questions:
 
-1. ZERO SEARCH RESULTS ≠ NO SDR TEAM.
-   Many real SDR teams simply don't appear in web search results. Small or mid-market B2B SaaS
-   companies often have 5–20 SDRs with zero public web footprint. If searches return nothing,
-   mark SDR/BDR Team Size as "Unknown" — NOT "Weak" or "Poor fit."
-   Base the score on industry fit, company stage, and go-to-market model instead.
+1. WHAT DO THEY SELL AND TO WHOM?
+   - Selling complex software to mid-market or enterprise buyers → almost always has SDRs
+   - Self-serve / freemium / PLG with no "talk to sales" CTA → unlikely to have SDRs
+   - CTAs like "Book a demo", "Talk to an expert", "Request a quote" → strong SDR signal
+   - Pricing page with "Contact us" for higher tiers → SDR team likely
 
-2. ANY positive signal is strong evidence. One Glassdoor mention, one job posting, one Greenhouse
-   listing, or one The Org result = confirmed SDR function. Weight it heavily.
+2. WHAT INDUSTRY AND STAGE?
+   - B2B SaaS, fintech, cybersecurity, HR tech, sales tech, cloud infrastructure → SDR-heavy
+   - Series B or later, or established company with a sales team → SDR team very likely
+   - Seed / very early stage with no sales team yet → SDR team unlikely
+   - Consumer, B2C, retail, marketplace → SDRs unlikely
 
-3. Reason from company characteristics when web signals are thin:
-   - B2B SaaS, Series B+, 50–500 employees, selling to enterprise or mid-market → almost certainly has SDRs
-   - Cloud cost, security, HR tech, revenue ops, sales tech → SDR-heavy sectors
-   - PLG/freemium, consumer, very early-stage → less likely to have SDRs
-   Use this reasoning to fill gaps when search results are empty.
+3. WHAT DOES THE JOB BOARD DATA SHOW?
+   - Any SDR/BDR/ADR/MDR/ISR postings found → confirmed SDR function, weight heavily
+   - Other sales roles posted (AE, Sales Manager, RevOps) → implies an SDR layer feeds them
+   - No job board data found → neutral signal only, do NOT treat as evidence of no SDRs
 
-4. Alternative titles (ADR, MDR, ISR, inside sales rep, outbound sales rep) = SDR equivalent.
-   Count them the same.
-
-5. Leadership found (VP/Director/Head/Manager of Sales Dev) = strong signal of structured SDR org.
+4. WHAT DO YOU ALREADY KNOW ABOUT THIS COMPANY?
+   Use your training knowledge. If you know this company has a sales team, use that.
+   Do not ignore what you know just because the website content is thin.
 
 ---
-Research this company and produce an ICP scorecard. Format it exactly like this:
+Nooks' Ideal Customer Profile:
+- B2B companies with a dedicated SDR or BDR team running outbound
+- Industries: B2B SaaS, fintech, cybersecurity, HR tech, MarTech, sales tech, healthcare tech, logistics tech
+- Stage: Series B+, or established companies scaling outbound
+- Buying signals: VP of Sales, Head of Sales Dev, CRO, RevOps as decision makers
+- Pain signals: low connect rates, long ramp times, inconsistent coaching, tool sprawl
+
+NOT a fit:
+- PLG / self-serve / inbound-only companies
+- Very early-stage startups with no sales team yet
+- B2C, consumer, retail
+- Pure product-led with no "talk to sales" motion
+
+---
+Produce an ICP scorecard in this exact format:
 
 ### ICP Score: [1, 2, 3, or 4] / 4
 
@@ -566,33 +504,32 @@ Research this company and produce an ICP scorecard. Format it exactly like this:
 
 ### Why This Score
 
-[2–3 sentences explaining the reasoning. Be specific about signals found — especially what the LinkedIn data showed about their SDR/BDR team.]
+[2–3 sentences. Lead with what the company does and who they sell to, then explain your
+conclusion about their SDR team likelihood and overall Nooks fit. Be direct and specific.]
 
 ---
 
-### SDR / BDR Team Intelligence
+### SDR / BDR Team Assessment
 
-- **Estimated SDR/BDR headcount:** [Best estimate from all search results — e.g. "~15 reps found across LinkedIn + Glassdoor" or "No individual reps found"]
-- **Title variants found:** [List any non-standard titles surfaced — ADR, MDR, ISR, inside sales, etc.]
-- **Leadership present:** [Yes / No / Unknown — name specific leaders found and their titles]
-- **Active hiring:** [Yes / No — cite any specific job postings found]
-- **Signal confidence:** [High / Medium / Low — based on how many of the 5 searches returned results]
+- **SDR team likelihood:** [High / Medium / Low] — [one sentence explaining the reasoning from their business model, not from web searches]
+- **Evidence from job boards:** [List any SDR/BDR/sales roles found in job board data, or "No open roles found — neutral signal"]
+- **Sales motion:** [Sales-led / PLG / Hybrid / Unknown] — [one line based on website CTAs and pricing model]
+- **Decision maker likely present:** [Yes / No / Unknown] — [VP Sales, CRO, Head of SDR, or similar]
 
 ---
 
 ### ICP Signal Breakdown
 
-- **Outbound Sales Motion:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
-- **SDR / BDR Team Size:** [Strong / Moderate / Weak / Unknown] — [one line with the actual LinkedIn-derived estimate]
-- **Industry Fit:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
-- **Company Stage & Growth:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
-- **Pain Signal Presence:** [Strong / Moderate / Weak / Unknown] — [one line explanation]
+- **Outbound Sales Motion:** [Strong / Moderate / Weak / Unknown] — [one line]
+- **SDR / BDR Team Likelihood:** [Strong / Moderate / Weak / Unknown] — [one line based on business model reasoning]
+- **Industry Fit:** [Strong / Moderate / Weak / Unknown] — [one line]
+- **Company Stage & Growth:** [Strong / Moderate / Weak / Unknown] — [one line]
+- **Pain Signal Presence:** [Strong / Moderate / Weak / Unknown] — [one line]
 
 ---
 
 ### Recommended Action
 
-[One of these four, based on the score:]
 - **Score 4:** Prioritize immediately. Add to active pipeline and reach out this week.
 - **Score 3:** Worth pursuing. Research further and add to outbound sequence.
 - **Score 2:** Possible fit. Monitor and revisit when you have more information.
@@ -601,13 +538,12 @@ Research this company and produce an ICP scorecard. Format it exactly like this:
 ---
 
 Scoring guide:
-- 4 = 4–5 strong ICP signals — clear fit, high priority
-- 3 = 3 strong signals or 4–5 moderate ones — good fit, worth pursuing
-- 2 = 1–2 strong signals or mixed signals — possible fit, needs qualification
-- 1 = Few or no ICP signals — poor fit, not worth time right now
+- 4 = Clear B2B sales-led company, strong industry fit, very likely has SDRs
+- 3 = Good fit indicators, probable SDR team, worth pursuing
+- 2 = Mixed signals — could go either way, needs qualification
+- 1 = PLG/inbound-only, B2C, or too early-stage to have SDRs
 
-Be honest and precise. The LinkedIn data is ground truth for SDR team size — use it.
-A bad lead wastes more time than no lead.
+A bad lead wastes more time than no lead. Be honest.
 """
 
     client = anthropic.Anthropic()
@@ -739,5 +675,7 @@ def main():
     print(f"\n✅ Saved to Desktop → {safe_name} → brief.docx")
     print("   Open it in Word or drag it into Google Docs.\n")
 
+
 if __name__ == "__main__":
     main()
+
