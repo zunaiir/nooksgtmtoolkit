@@ -443,7 +443,7 @@ elif "ICP" in tool:
             if score_match:
                 score = int(score_match.group(1))
                 colours = {1: "#EF4444", 2: "#F97316", 3: "#3B82F6", 4: "#7C3AED"}
-                labels  = {1: "Poor Fit", 2: "Possible Fit", 3: "Good Fit", 4: "Strong Fit"}
+                labels  = {1: "Poor Fit", 2: "SMB Opportunity", 3: "Good Fit", 4: "Strong Fit"}
                 colour  = colours[score]
                 label   = labels[score]
                 st.markdown(
@@ -456,3 +456,4 @@ elif "ICP" in tool:
 
             st.markdown(result)
             st.divider()
+
