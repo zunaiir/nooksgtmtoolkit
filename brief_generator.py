@@ -62,126 +62,218 @@ def fetch_news(company_name):
         return ""
 
 
-def _ddg_search(query, label, max_results=10):
-    """Run a single DuckDuckGo text search and return a formatted findings string."""
+def _google_search(query, label, num_results=10):
+    """
+    Search Google and return titles, URLs, and snippets.
+    Uses requests + BeautifulSoup — no extra library needed.
+    Handles Google's HTML with two fallback selector strategies.
+    """
+    from urllib.parse import quote as url_quote, unquote
+
     try:
+        search_url = (
+            f"https://www.google.com/search"
+            f"?q={url_quote(query)}&num={num_results}&hl=en&gl=us"
+        )
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+
+        r = requests.get(search_url, headers=headers, timeout=12)
+        if r.status_code == 429:
+            return f"[{label} — Google rate-limited, try again in a moment]"
+        if r.status_code != 200:
+            return f"[{label} — Google returned HTTP {r.status_code}]"
+
+        soup = BeautifulSoup(r.text, "html.parser")
         results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
-                title   = r.get("title", "")
-                snippet = r.get("body", "")[:220]
-                url     = r.get("href", "")
-                results.append(f"  • [{url}]\n    {title}\n    {snippet}")
+
+        # Primary strategy: div.g result containers
+        for container in soup.select("div.g"):
+            h3 = container.find("h3")
+            if not h3:
+                continue
+            title = h3.get_text(strip=True)
+
+            a = container.find("a", href=True)
+            href = a["href"] if a else ""
+            if href.startswith("/url?q="):
+                href = unquote(href.split("/url?q=")[1].split("&")[0])
+
+            # Snippet — try several selector patterns Google has used
+            snippet = ""
+            for sel in ["div.VwiC3b", "div[data-sncf]", "span.aCOpRe",
+                         "div.s", "div.IsZvec"]:
+                el = container.select_one(sel)
+                if el:
+                    snippet = el.get_text(separator=" ", strip=True)[:220]
+                    break
+
+            if title:
+                results.append(f"  • {title}\n    {href}\n    {snippet}")
+
         if results:
             return f"[{label} — {len(results)} result(s)]\n" + "\n".join(results)
+
+        # Fallback: if Google's HTML changed, grab all h3 headings as titles
+        fallback = [
+            f"  • {h3.get_text(strip=True)}"
+            for h3 in soup.find_all("h3")[:num_results]
+            if len(h3.get_text(strip=True)) > 5
+        ]
+        if fallback:
+            return (
+                f"[{label} — {len(fallback)} result(s) (title-only fallback)]\n"
+                + "\n".join(fallback)
+            )
+
         return f"[{label} — 0 results]"
+
     except Exception as e:
-        return f"[{label} — failed: {e}]"
+        return f"[{label} — search error: {e}]"
 
 
-def _fetch_page_text(url, label, char_limit=3000):
-    """Directly fetch a page and return its visible text (best-effort)."""
+def _fetch_page(url, label, char_limit=3000):
+    """
+    Directly fetch a URL and return visible text. Skips pages that redirect
+    to a login wall (LinkedIn, Glassdoor) by checking for auth keywords.
+    """
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-        r = requests.get(url, headers=headers, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
         if r.status_code != 200:
-            return f"[{label} — HTTP {r.status_code}]"
+            return f"[{label} — HTTP {r.status_code}, skipped]"
+
         soup = BeautifulSoup(r.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
-        text = soup.get_text(separator=" ", strip=True)[:char_limit]
-        return f"[{label} — fetched successfully]\n{text}" if text else f"[{label} — empty page]"
+        text = soup.get_text(separator=" ", strip=True)
+
+        # Detect login walls — return nothing useful rather than mislead Claude
+        login_signals = ["sign in to view", "join to see", "log in to continue",
+                         "create a free account", "authwall", "join linkedin"]
+        if any(sig in text.lower() for sig in login_signals):
+            return f"[{label} — login wall, skipped]"
+
+        text = text[:char_limit]
+        return f"[{label} — fetched OK]\n{text}" if text else f"[{label} — empty page]"
     except Exception as e:
-        return f"[{label} — fetch failed: {e}]"
+        return f"[{label} — fetch error: {e}]"
 
 
-def fetch_linkedin_sdr_signals(company_name):
+def fetch_sdr_signals(company_name, website_url=""):
     """
-    Surface real SDR/BDR team signals using simple targeted searches + direct page fetches.
+    Surface SDR/BDR team signals via Google search + direct job-board page fetches.
 
-    Problem with previous approach: long OR-chains and site: restrictions cause DuckDuckGo
-    to silently drop queries or return zero results. Fix: one concept per query, short and direct.
+    Layer 1 — Google searches (requests + BeautifulSoup, no extra library):
+      Each query targets one concept. Google surfaces LinkedIn profiles, Glassdoor
+      reviews, job postings, and news articles that DuckDuckGo misses.
 
-    Eight signal sources:
-      1–2. Simple SDR/BDR title searches (no boolean complexity)
-      3.   SDR leadership titles search
-      4.   Hiring signals search
-      5.   Alternative title search (ADR, MDR, ISR, inside sales)
-      6.   Direct fetch of The Org page (real org chart data)
-      7.   Direct fetch of Glassdoor people/reviews page
-      8.   LinkedIn company people page (best-effort — often partial)
+    Layer 2 — Direct page fetches of public, login-free sources:
+      Company careers page, Greenhouse board, Lever board.
+      (The Org excluded — data can be outdated.)
     """
-    if not HAS_SEARCH:
-        return ""
-
-    slug = company_name.lower().replace(" ", "-").replace(".", "").replace(",", "")
+    slug = company_name.lower().replace(" ", "-").replace(".", "").replace(",", "").replace("'", "")
     findings = []
 
-    # ── Simple DuckDuckGo searches — one concept each ────────────────────────
+    # ── Layer 1: Google searches ──────────────────────────────────────────────
 
-    # 1. SDR title — bare and direct
-    findings.append(_ddg_search(
+    # Core SDR/BDR title searches — catch LinkedIn profiles, Glassdoor, news
+    findings.append(_google_search(
         f'{company_name} "sales development representative"',
-        "Search 1: SDR title"
+        "Google 1 — SDR title"
     ))
-
-    # 2. BDR title — separate query, not an OR chain
-    findings.append(_ddg_search(
+    findings.append(_google_search(
         f'{company_name} "business development representative"',
-        "Search 2: BDR title"
+        "Google 2 — BDR title"
     ))
 
-    # 3. SDR/BDR leadership — short, one phrase at a time
-    findings.append(_ddg_search(
+    # LinkedIn specifically — Google indexes LinkedIn profile snippets even when DDG doesn't
+    findings.append(_google_search(
+        f'{company_name} "sales development representative" site:linkedin.com',
+        "Google 3 — LinkedIn SDR profiles"
+    ))
+    findings.append(_google_search(
+        f'{company_name} "sales development" site:linkedin.com',
+        "Google 4 — LinkedIn sales development (broad)"
+    ))
+
+    # Glassdoor — employee reviews often mention SDR teams and headcounts
+    findings.append(_google_search(
+        f'{company_name} "sales development" site:glassdoor.com',
+        "Google 5 — Glassdoor SDR mentions"
+    ))
+
+    # Job boards — Greenhouse and Lever indexed by Google
+    findings.append(_google_search(
+        f'{company_name} "sales development representative" site:boards.greenhouse.io',
+        "Google 6 — Greenhouse SDR postings"
+    ))
+    findings.append(_google_search(
+        f'{company_name} "sales development representative" site:jobs.lever.co',
+        "Google 7 — Lever SDR postings"
+    ))
+    findings.append(_google_search(
+        f'{company_name} "sales development representative" site:wellfound.com',
+        "Google 8 — Wellfound SDR postings"
+    ))
+
+    # SDR leadership titles
+    findings.append(_google_search(
         f'{company_name} "head of sales development" OR "VP of sales development" OR "director of sales development"',
-        "Search 3: SDR leadership (Head / VP / Director)"
+        "Google 9 — SDR leadership (Head/VP/Director)"
     ))
-    findings.append(_ddg_search(
+    findings.append(_google_search(
         f'{company_name} "SDR manager" OR "BDR manager" OR "sales development manager"',
-        "Search 4: SDR manager titles"
+        "Google 10 — SDR manager titles"
     ))
 
-    # 4. Hiring signals — simple job-board search
-    findings.append(_ddg_search(
-        f'{company_name} "sales development representative" jobs hiring',
-        "Search 5: SDR hiring signals"
+    # Alternative outbound rep titles
+    findings.append(_google_search(
+        f'{company_name} "inside sales representative" OR "account development representative"',
+        "Google 11 — ISR / ADR titles"
     ))
 
-    # 5. Alternative outbound rep titles — one query per title family
-    findings.append(_ddg_search(
-        f'{company_name} "inside sales representative" OR "inside sales" OR "outbound sales representative"',
-        "Search 6: Inside sales / outbound rep titles"
+    # General hiring signal — catches any mention of SDR hiring on the open web
+    findings.append(_google_search(
+        f'{company_name} SDR hiring',
+        "Google 12 — SDR hiring signal"
     ))
-    findings.append(_ddg_search(
-        f'{company_name} "account development representative" OR "market development representative"',
-        "Search 7: ADR / MDR titles"
-    ))
-
-    # ── Direct page fetches — richer structured data ─────────────────────────
-
-    # 6. The Org — has real org charts with headcounts and team breakdowns
-    findings.append(_fetch_page_text(
-        f"https://theorg.com/org/{slug}/teams/sales-development",
-        "The Org — Sales Development team page"
-    ))
-    findings.append(_fetch_page_text(
-        f"https://theorg.com/org/{slug}",
-        "The Org — company overview page"
+    findings.append(_google_search(
+        f'{company_name} BDR hiring',
+        "Google 13 — BDR hiring signal"
     ))
 
-    # 7. Glassdoor jobs page for SDR roles at this company
-    findings.append(_fetch_page_text(
-        f"https://www.glassdoor.com/Jobs/{company_name.replace(' ', '-')}-Sales-Development-Representative-Jobs-E0.htm",
-        "Glassdoor — SDR job listings"
+    # ── Layer 2: Direct page fetches (public, no login required) ─────────────
+
+    # Company's own careers/jobs page — most authoritative for open SDR roles
+    if website_url:
+        domain = website_url.replace("https://", "").replace("http://", "").rstrip("/").split("/")[0]
+        for path in ["/careers", "/jobs", "/about/careers", "/careers/open-roles"]:
+            findings.append(_fetch_page(f"https://{domain}{path}", f"Careers page ({path})"))
+
+    # Public Greenhouse job board — no login required
+    findings.append(_fetch_page(
+        f"https://boards.greenhouse.io/{slug}",
+        "Greenhouse board (direct fetch)"
     ))
 
-    # 8. LinkedIn company people page (often partial but sometimes surfaces role data)
-    findings.append(_fetch_page_text(
-        f"https://www.linkedin.com/company/{slug}/people/",
-        "LinkedIn — company people page (best-effort)"
+    # Public Lever job board — no login required
+    findings.append(_fetch_page(
+        f"https://jobs.lever.co/{slug}",
+        "Lever board (direct fetch)"
     ))
 
-    return "\n\n".join(f for f in findings if f) or "No SDR/BDR signals found."
+    return "\n\n".join(f for f in findings if f) or "No SDR/BDR signals found across all sources."
 
 
 def generate_brief(company_name, website_url, contact_name, contact_title):
@@ -401,7 +493,7 @@ def generate_icp_score(company_name, website_url):
     """Research a company and score it against Nooks' ICP (1-4)."""
     website_content   = fetch_website(website_url)
     news_content      = fetch_news(company_name)
-    linkedin_signals  = fetch_linkedin_sdr_signals(company_name)
+    linkedin_signals  = fetch_sdr_signals(company_name, website_url)
 
     context_parts = []
     if website_content:
@@ -438,19 +530,30 @@ CONTEXT:
 
 ---
 HOW TO INTERPRET THE SDR/BDR SIGNALS:
-Five searches were run — LinkedIn broad search, open-web mentions, leadership search, hiring signals,
-and alternative title sweep (ADR, MDR, ISR, inside sales). Use these as your primary source of truth
-for SDR/BDR team presence and size — they are more reliable than website copy.
+Up to 13 searches and 4 direct page fetches were run across job boards (Greenhouse, Lever, Wellfound),
+Glassdoor, The Org, and the company's own careers page. Use all results together.
 
-Interpreting results:
-- Each distinct profile or person mention typically represents one real team member.
-  Estimate team size: 1–3 results = very small; 4–8 = small; 9–20 = mid-size; 20+ = large team.
-- Mentions on Glassdoor, The Org, Crunchbase, or news articles confirm the team is real and visible.
-- Any active job posting for an SDR/BDR/ADR/MDR role = strong growth signal, weight positively.
-- Leadership results (VP/Director/Head/Manager of Sales Dev) = structured outbound org, weight strongly.
-- Alternative titles (ADR, MDR, ISR, inside sales rep) count equally — they are the same role.
-- If ALL five searches returned 0 results, treat SDR/BDR presence as Unknown or Weak.
-- Do NOT let website copy override clear evidence from search results about team size or presence.
+CRITICAL RULES — read carefully before scoring:
+
+1. ZERO SEARCH RESULTS ≠ NO SDR TEAM.
+   Many real SDR teams simply don't appear in web search results. Small or mid-market B2B SaaS
+   companies often have 5–20 SDRs with zero public web footprint. If searches return nothing,
+   mark SDR/BDR Team Size as "Unknown" — NOT "Weak" or "Poor fit."
+   Base the score on industry fit, company stage, and go-to-market model instead.
+
+2. ANY positive signal is strong evidence. One Glassdoor mention, one job posting, one Greenhouse
+   listing, or one The Org result = confirmed SDR function. Weight it heavily.
+
+3. Reason from company characteristics when web signals are thin:
+   - B2B SaaS, Series B+, 50–500 employees, selling to enterprise or mid-market → almost certainly has SDRs
+   - Cloud cost, security, HR tech, revenue ops, sales tech → SDR-heavy sectors
+   - PLG/freemium, consumer, very early-stage → less likely to have SDRs
+   Use this reasoning to fill gaps when search results are empty.
+
+4. Alternative titles (ADR, MDR, ISR, inside sales rep, outbound sales rep) = SDR equivalent.
+   Count them the same.
+
+5. Leadership found (VP/Director/Head/Manager of Sales Dev) = strong signal of structured SDR org.
 
 ---
 Research this company and produce an ICP scorecard. Format it exactly like this:
@@ -635,7 +738,6 @@ def main():
 
     print(f"\n✅ Saved to Desktop → {safe_name} → brief.docx")
     print("   Open it in Word or drag it into Google Docs.\n")
-
 
 if __name__ == "__main__":
     main()
